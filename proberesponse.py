@@ -88,16 +88,37 @@ iface = None
 def respond( pkt ):
     global l0idx, l1idx
     print( 'got', repr( pkt ) )
-    response = pkt[ IP ]
+    if IP in pkt:
+        ip = IP
+        icmp = ICMP
+        responseType = 43
+    else:
+        if IPv6 not in pkt:
+            print( '[ignoring]' )
+            return
+        ip = IPv6
+        icmp = ICMPv6Unknown
+        responseType = 161
+    response = pkt[ ip ]
     esrc, edst = pkt.src, pkt.dst
     pkt.dst, pkt.src = esrc, edst
     src, dst = response.src, response.dst
     response.dst, response.src = src, dst
-    response.id += 42
+    if ip == IP:
+        response.id = ( response.id + 42 ) % 65536
     response.chksum = None
     response.len = None
-    response[ ICMP ].type = 43
-    local = response[ ICMP ].unused & 0x1
+    if icmp == ICMP:
+        secondWord = response[ ICMP ].unused
+    else:
+        # Why does an unknown ICMPv6 type parse to Raw
+        # and not ICMPv6Unknown?  That's unknown.
+        response.payload = icmp( response.payload )
+        print( "Updated", repr( response ) )
+        secondWord = struct.unpack( ">I", response[ icmp ].msgbody[ : 4 ] )[ 0 ]
+    response[ icmp ].type = responseType
+    local = secondWord & 0x1
+    idAndSeq = secondWord & 0xffffff00
     if local:
         if l1idx >= len( localResponses ):
             # Last one - let it time out, but reset
@@ -107,16 +128,13 @@ def respond( pkt ):
             return
         resp = localResponses[ l1idx ]
         l1idx += 1
-        response[ ICMP ].code = resp.code
-        idAndSeq = response[ ICMP ].unused & 0xffffff00
+        response[ icmp ].code = resp.code
         if resp.A:
             idAndSeq |= 0x4
         if resp.v4:
             idAndSeq |= 0x2
         if resp.v6:
             idAndSeq |= 0x1
-        response[ ICMP ].unused = idAndSeq
-        print( resp )
     else:
         if l0idx >= len( remoteResponses ):
             # Last one - let it time out, but reset
@@ -126,13 +144,18 @@ def respond( pkt ):
             return
         resp = remoteResponses[ l0idx ]
         l0idx += 1
-        response[ ICMP ].code = resp.code
-        idAndSeq = response[ ICMP ].unused & 0xffffff00
+        response[ icmp ].code = resp.code
         idAndSeq |= resp.state << 5
+    if icmp == ICMP:
         response[ ICMP ].unused = idAndSeq
-        print( resp )
+    else:
+        response[ icmp ].msgbody = struct.pack( ">I", idAndSeq ) + response[ icmp ].msgbody[ 4 : ]
     # recalculate checksums
-    response[ ICMP ].chksum = None
+    if icmp == ICMP:
+        response[ icmp ].chksum = None
+    else:
+        # There's no "h" in IPv6
+        response[ icmp ].cksum = None
     print( "sending", repr( pkt ) )
     sendp( pkt, iface=iface )
 
@@ -145,7 +168,7 @@ def main():
 
     if args.iface:
         iface = args.iface
-    sniff(iface=iface, filter='icmp[icmptype] == 42', prn=respond)
+    sniff(iface=iface, filter='icmp[icmptype] == 42 or icmp6[icmptype] == 160', prn=respond)
 
 if __name__ == '__main__':
     main()
