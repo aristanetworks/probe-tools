@@ -65,7 +65,7 @@ states = {
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument( 'ipaddr' )
-    group = parser.add_mutually_exclusive_group()
+    group = parser.add_mutually_exclusive_group( required=True )
     group.add_argument( '--ifindex', type=int )
     group.add_argument( '--ifname' )
     group.add_argument( '--addr' )
